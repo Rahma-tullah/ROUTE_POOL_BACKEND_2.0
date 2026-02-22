@@ -9,6 +9,7 @@ import ratingsRoutes from "./routes/ratings.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import clusteringRoutes from "./routes/clustering.routes.js";
 import verificationRoutes from "./routes/verification.routes.js";
+import statusRoutes from "./routes/status.routes.js";
 // Load environment variables
 dotenv.config();
 
@@ -40,6 +41,7 @@ app.use("/api/ratings", ratingsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/clustering", clusteringRoutes);
 app.use("/api/verification", verificationRoutes);
+app.use("/api/status", statusRoutes);
 // Health check route
 app.get("/health", (req, res) => {
   res.json({

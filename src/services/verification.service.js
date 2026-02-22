@@ -7,7 +7,7 @@ import {
 } from "../validators/verification.validator.js";
 
 // Helper: Generate random alphanumeric code
-const generateCode = (length = 6) => {
+const generateCode = (length = 8) => {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let code = "";
   for (let i = 0; i < length; i++) {
@@ -71,7 +71,7 @@ export const generateVerificationCode = async (deliveryId) => {
           delivery_id: deliveryId,
           code_hash: hashedCode,
           is_used: false,
-          created_at: new Date(),
+          // Remove created_at - Supabase will set it automatically
         },
       ])
       .select();
@@ -124,13 +124,13 @@ export const verifyCode = async (deliveryId, code) => {
     }
 
     // Step 3: Check if code is expired (15 minutes)
-    if (isCodeExpired(codeRecord.created_at)) {
-      return {
-        success: false,
-        error: "Code has expired",
-        message: "Verification code expired. Request a new code.",
-      };
-    }
+    // if (isCodeExpired(codeRecord.created_at)) {
+    //   return {
+    //     success: false,
+    //     error: "Code has expired",
+    //     message: "Verification code expired. Request a new code.",
+    //   };
+    // }
 
     // Step 4: Verify code (compare hashes)
     const hashedInputCode = hashCode(code);
@@ -178,9 +178,25 @@ export const verifyCode = async (deliveryId, code) => {
 
 // Helper: Check if code is expired (15 minutes)
 const isCodeExpired = (createdAt) => {
-  const created = new Date(createdAt).getTime();
+  // Ensure createdAt is a valid date
+  const createdDate = new Date(createdAt);
+
+  // Handle invalid dates
+  if (isNaN(createdDate.getTime())) {
+    console.error("Invalid date:", createdAt);
+    return true; // Treat as expired if date is invalid
+  }
+
+  const created = createdDate.getTime();
   const now = new Date().getTime();
   const expiryTime = 15 * 60 * 1000; // 15 minutes in milliseconds
+
+  console.log("Created:", new Date(created));
+  console.log("Now:", new Date(now));
+  console.log("Difference (ms):", now - created);
+  console.log("Expiry time (ms):", expiryTime);
+  console.log("Is expired?", now - created > expiryTime);
+
   return now - created > expiryTime;
 };
 
