@@ -1,5 +1,5 @@
 // src/services/verification.service.js
-
+import { logger } from "../utils/logger.js";
 import supabase from "../config/supabase.js";
 import {
   validateCodeGeneration,
@@ -100,6 +100,8 @@ export const generateVerificationCode = async (deliveryId) => {
 // Verify code for delivery
 export const verifyCode = async (deliveryId, code) => {
   try {
+    logger.info("Code verification attempt", { deliveryId });
+
     validateCodeVerification({ delivery_id: deliveryId, code: code });
 
     // Step 1: Get delivery
@@ -109,7 +111,10 @@ export const verifyCode = async (deliveryId, code) => {
       .eq("id", deliveryId)
       .single();
 
-    if (deliveryError) throw new Error("Delivery not found");
+    if (deliveryError) {
+      logger.error("Delivery not found for verification", { deliveryId });
+      throw new Error("Delivery not found");
+    }
 
     // Step 2: Get verification code record
     const { data: codeRecord, error: codeError } = await supabase
@@ -120,21 +125,27 @@ export const verifyCode = async (deliveryId, code) => {
       .single();
 
     if (codeError || !codeRecord) {
+      logger.warn("No valid code found", { deliveryId });
       throw new Error("No valid verification code found for this delivery");
     }
 
-    // Step 3: Check if code is expired (15 minutes)
-    // if (isCodeExpired(codeRecord.created_at)) {
-    //   return {
-    //     success: false,
-    //     error: "Code has expired",
-    //     message: "Verification code expired. Request a new code.",
-    //   };
-    // }
+    // Step 3: Check if code is expired
+    if (isCodeExpired(codeRecord.created_at)) {
+      logger.warn("Code expired", { deliveryId, codeId: codeRecord.id });
+      return {
+        success: false,
+        error: "Code has expired",
+        message: "Verification code expired. Request a new code.",
+      };
+    }
 
-    // Step 4: Verify code (compare hashes)
+    // Step 4: Verify code
     const hashedInputCode = hashCode(code);
     if (hashedInputCode !== codeRecord.code_hash) {
+      logger.warn("Invalid code provided", {
+        deliveryId,
+        codeId: codeRecord.id,
+      });
       return {
         success: false,
         error: "Invalid code",
@@ -148,7 +159,13 @@ export const verifyCode = async (deliveryId, code) => {
       .update({ is_used: true, used_at: new Date() })
       .eq("id", codeRecord.id);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      logger.error("Failed to mark code as used", {
+        deliveryId,
+        codeId: codeRecord.id,
+      });
+      throw updateError;
+    }
 
     // Step 6: Mark delivery as completed
     const { error: deliveryUpdateError } = await supabase
@@ -156,7 +173,15 @@ export const verifyCode = async (deliveryId, code) => {
       .update({ status: "delivered" })
       .eq("id", deliveryId);
 
-    if (deliveryUpdateError) throw deliveryUpdateError;
+    if (deliveryUpdateError) {
+      logger.error("Failed to mark delivery as completed", { deliveryId });
+      throw deliveryUpdateError;
+    }
+
+    logger.info("Code verified successfully", {
+      deliveryId,
+      status: "delivered",
+    });
 
     return {
       success: true,
@@ -168,6 +193,10 @@ export const verifyCode = async (deliveryId, code) => {
       message: "Delivery verified and marked as completed!",
     };
   } catch (error) {
+    logger.error("Code verification failed", {
+      deliveryId,
+      error: error.message,
+    });
     return {
       success: false,
       error: error.message,
@@ -175,7 +204,6 @@ export const verifyCode = async (deliveryId, code) => {
     };
   }
 };
-
 // Helper: Check if code is expired (15 minutes)
 const isCodeExpired = (createdAt) => {
   // Ensure createdAt is a valid date

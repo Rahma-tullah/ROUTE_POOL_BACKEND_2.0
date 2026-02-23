@@ -1,3 +1,5 @@
+import { startAutoBatchCron } from "./services/cron.service.js";
+import { logger } from "./utils/logger.js";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -10,11 +12,13 @@ import authRoutes from "./routes/auth.routes.js";
 import clusteringRoutes from "./routes/clustering.routes.js";
 import verificationRoutes from "./routes/verification.routes.js";
 import statusRoutes from "./routes/status.routes.js";
+
 // Load environment variables
 dotenv.config();
 
 // Create Express app
 const app = express();
+logger.info("Server starting");
 const PORT = process.env.PORT || 3000;
 
 // Middleware
@@ -65,4 +69,11 @@ app.listen(PORT, () => {
   console.log(`📚 API Documentation:`);
   console.log(`   GET  http://localhost:${PORT}/`);
   console.log(`   GET  http://localhost:${PORT}/health`);
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Server running on http://localhost:${PORT}`);
+
+  // Start auto-batch cron job
+  startAutoBatchCron();
 });

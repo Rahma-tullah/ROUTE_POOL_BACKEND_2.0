@@ -28,7 +28,22 @@ router.post("/", async (req, res) => {
     });
   }
 });
+router.post("/", async (req, res) => {
+  try {
+    const result = await createDelivery(req.body);
 
+    if (result.success) {
+      return res.status(201).json(result);
+    } else {
+      return res.status(400).json(result);
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 // GET: Get all deliveries
 // Usage: GET /api/deliveries
 router.get("/", async (req, res) => {

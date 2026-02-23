@@ -1,5 +1,5 @@
 // src/services/clustering.service.js
-
+import { logger } from "../utils/logger.js";
 import supabase from "../config/supabase.js";
 
 // Helper function: Calculate distance between two coordinates (Haversine formula)
@@ -154,6 +154,8 @@ export const findBestRider = async () => {
 // Create batch from nearby deliveries
 export const createBatchFromNearby = async (deliveryId) => {
   try {
+    logger.info("Batch creation attempt", { deliveryId });
+
     // Step 1: Get the delivery
     const { data: delivery, error: deliveryError } = await supabase
       .from("deliveries")
@@ -161,27 +163,47 @@ export const createBatchFromNearby = async (deliveryId) => {
       .eq("id", deliveryId)
       .single();
 
-    if (deliveryError) throw deliveryError;
+    if (deliveryError) {
+      logger.error("Delivery not found", {
+        deliveryId,
+        error: deliveryError.message,
+      });
+      throw deliveryError;
+    }
 
     if (!delivery.latitude || !delivery.longitude) {
+      logger.warn("Delivery missing coordinates", { deliveryId });
       throw new Error("Delivery must have valid coordinates");
     }
 
-    // Step 2: Find nearby deliveries (including the original)
+    logger.info("Delivery found", {
+      deliveryId,
+      lat: delivery.latitude,
+      lon: delivery.longitude,
+    });
+
+    // Step 2: Find nearby deliveries
     const nearbyResult = await findNearbyDeliveries(
       delivery.latitude,
       delivery.longitude,
-      1, // 1km radius
+      1,
     );
 
     if (!nearbyResult.success) {
+      logger.error("Failed to find nearby deliveries", { deliveryId });
       throw new Error(nearbyResult.error);
     }
 
-    // Step 3: Check if we have 3+ deliveries (including original)
     const nearbyCount = nearbyResult.count;
+    logger.info("Nearby deliveries found", { deliveryId, nearbyCount });
 
+    // Step 3: Check if we have 3+ deliveries
     if (nearbyCount < 3) {
+      logger.info("Not enough nearby deliveries for batch", {
+        deliveryId,
+        found: nearbyCount,
+        needed: 3,
+      });
       return {
         success: false,
         canBatch: false,
@@ -195,10 +217,16 @@ export const createBatchFromNearby = async (deliveryId) => {
     const riderResult = await findBestRider();
 
     if (!riderResult.success) {
+      logger.error("No available riders", { deliveryId });
       throw new Error(riderResult.error);
     }
 
     const rider = riderResult.data;
+    logger.info("Best rider selected", {
+      deliveryId,
+      riderId: rider.id,
+      riderName: rider.name,
+    });
 
     // Step 5: Create batch
     const { data: batch, error: batchError } = await supabase
@@ -212,9 +240,20 @@ export const createBatchFromNearby = async (deliveryId) => {
       ])
       .select();
 
-    if (batchError) throw batchError;
+    if (batchError) {
+      logger.error("Batch creation failed", {
+        deliveryId,
+        error: batchError.message,
+      });
+      throw batchError;
+    }
 
     const batchId = batch[0].id;
+    logger.info("Batch created", {
+      batchId,
+      riderId: rider.id,
+      deliveriesCount: nearbyCount,
+    });
 
     // Step 6: Link nearby deliveries to batch
     const nearbyIds = nearbyResult.data.map((d) => d.id);
@@ -224,7 +263,20 @@ export const createBatchFromNearby = async (deliveryId) => {
       .update({ batch_id: batchId })
       .in("id", nearbyIds);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      logger.error("Failed to link deliveries to batch", {
+        batchId,
+        deliveryIds: nearbyIds,
+        error: updateError.message,
+      });
+      throw updateError;
+    }
+
+    logger.info("Batch creation successful", {
+      batchId,
+      deliveryIds: nearbyIds,
+      rider: rider.name,
+    });
 
     return {
       success: true,
@@ -242,6 +294,7 @@ export const createBatchFromNearby = async (deliveryId) => {
       message: `Batch created! ${nearbyCount} deliveries assigned to ${rider.name} (Rating: ${rider.average_rating})`,
     };
   } catch (error) {
+    logger.error("Batch creation failed", { deliveryId, error: error.message });
     return {
       success: false,
       error: error.message,
@@ -249,7 +302,6 @@ export const createBatchFromNearby = async (deliveryId) => {
     };
   }
 };
-
 // Get clustering statistics
 export const getClusteringStats = async () => {
   try {

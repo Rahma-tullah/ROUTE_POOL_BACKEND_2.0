@@ -1,5 +1,5 @@
 // src/services/auth.service.js
-
+import { logger } from "../utils/logger.js";
 import supabase from "../config/supabase.js";
 import {
   validateSignup,
@@ -37,6 +37,11 @@ const generateSecurePassword = () => {
 // Signup - Create new user
 export const signup = async (signupData) => {
   try {
+    logger.info("Signup attempt", {
+      email: signupData.email,
+      userType: signupData.user_type,
+    });
+
     validateSignup(signupData);
 
     const { email, name, phone, user_type, shop_name, vehicle_type } =
@@ -45,12 +50,16 @@ export const signup = async (signupData) => {
     // Step 1: Create user in Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: email,
-      password: generateSecurePassword(), // Random password (not used for OTP)
+      password: generateSecurePassword(),
     });
 
-    if (authError) throw authError;
+    if (authError) {
+      logger.error("Auth signup failed", { email, error: authError.message });
+      throw authError;
+    }
 
     const userId = authData.user.id;
+    logger.info("Auth user created", { email, userId });
 
     // Step 2: Create user record in appropriate table
     let userData;
@@ -68,8 +77,15 @@ export const signup = async (signupData) => {
         ])
         .select();
 
-      if (error) throw error;
+      if (error) {
+        logger.error("Retailer creation failed", {
+          email,
+          error: error.message,
+        });
+        throw error;
+      }
       userData = data[0];
+      logger.info("Retailer created", { email, retailerId: userData.id });
     } else if (user_type === "rider") {
       const { data, error } = await supabase
         .from("riders")
@@ -83,10 +99,15 @@ export const signup = async (signupData) => {
         ])
         .select();
 
-      if (error) throw error;
+      if (error) {
+        logger.error("Rider creation failed", { email, error: error.message });
+        throw error;
+      }
       userData = data[0];
+      logger.info("Rider created", { email, riderId: userData.id });
     }
 
+    logger.info("Signup successful", { email, userId, userType: user_type });
     return {
       success: true,
       data: {
@@ -97,6 +118,10 @@ export const signup = async (signupData) => {
       message: "Signup successful",
     };
   } catch (error) {
+    logger.error("Signup failed", {
+      email: signupData.email,
+      error: error.message,
+    });
     return {
       success: false,
       error: error.message,
