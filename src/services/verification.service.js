@@ -1,6 +1,7 @@
 // src/services/verification.service.js
 import { logger } from "../utils/logger.js";
 import supabase from "../config/supabase.js";
+import bcryptjs from "bcryptjs";
 import {
   validateCodeGeneration,
   validateCodeVerification,
@@ -17,9 +18,8 @@ const generateCode = (length = 8) => {
 };
 
 // Helper: Generate hash for code (for storage)
-const hashCode = (code) => {
-  // Simple hash for MVP (use bcrypt in production)
-  return Buffer.from(code).toString("base64");
+const hashCode = async (code) => {
+  return await bcryptjs.hash(code, 10);
 };
 
 // Generate verification code for delivery
@@ -140,8 +140,8 @@ export const verifyCode = async (deliveryId, code) => {
     }
 
     // Step 4: Verify code
-    const hashedInputCode = hashCode(code);
-    if (hashedInputCode !== codeRecord.code_hash) {
+    const isCodeValid = await bcryptjs.compare(code, codeRecord.code_hash);
+    if (!isCodeValid) {
       logger.warn("Invalid code provided", {
         deliveryId,
         codeId: codeRecord.id,

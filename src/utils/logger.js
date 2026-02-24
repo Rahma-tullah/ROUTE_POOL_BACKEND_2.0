@@ -1,13 +1,20 @@
 // src/utils/logger.js
 
+const log = (level, message, data = {}) => {
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    level,
+    message,
+    ...data,
+  };
+
+  console.log(`[${timestamp}] [${level}] ${message}`, data);
+};
+
 export const logger = {
-  info: (msg, data) => {
-    console.log(`[INFO] ${msg}`, data || "");
-  },
-  error: (msg, data) => {
-    console.log(`[ERROR] ${msg}`, data || "");
-  },
-  warn: (msg, data) => {
-    console.log(`[WARN] ${msg}`, data || "");
-  },
+  info: (msg, data = {}) => log("INFO", msg, data),
+  error: (msg, data = {}) => log("ERROR", msg, data),
+  warn: (msg, data = {}) => log("WARN", msg, data),
+  debug: (msg, data = {}) => log("DEBUG", msg, data), // ← MAKE SURE THIS EXISTS
 };

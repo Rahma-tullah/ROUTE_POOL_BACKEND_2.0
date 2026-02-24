@@ -46,6 +46,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/clustering", clusteringRoutes);
 app.use("/api/verification", verificationRoutes);
 app.use("/api/status", statusRoutes);
+
 // Health check route
 app.get("/health", (req, res) => {
   res.json({
@@ -69,10 +70,6 @@ app.listen(PORT, () => {
   console.log(`📚 API Documentation:`);
   console.log(`   GET  http://localhost:${PORT}/`);
   console.log(`   GET  http://localhost:${PORT}/health`);
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
 
   // Start auto-batch cron job
   startAutoBatchCron();

@@ -1,10 +1,12 @@
 // src/routes/riders.routes.js
-
+import { verifyToken } from "../middleware/auth.middleware.js";
+import supabase from "../config/supabase.js";
+import { logger } from "../utils/logger.js";
 import express from "express";
 import {
   createRider,
   getAllRiders,
-  getRiderById,
+  getRider,
   getRidersByVehicleType,
   updateRider,
   deleteRider,
@@ -75,7 +77,7 @@ router.get("/vehicle/:vehicleType", async (req, res) => {
 router.get("/:riderId", async (req, res) => {
   try {
     const { riderId } = req.params;
-    const result = await getRiderById(riderId);
+    const result = await getRider(riderId);
 
     if (result.success) {
       return res.status(200).json(result);
@@ -92,10 +94,31 @@ router.get("/:riderId", async (req, res) => {
 
 // PUT: Update rider
 // Usage: PUT /api/riders/1
-router.put("/:riderId", async (req, res) => {
+router.put("/:id", verifyToken, async (req, res) => {
   try {
-    const { riderId } = req.params;
-    const result = await updateRider(riderId, req.body);
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Only allow rider to update their own profile
+    if (id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden",
+        message: "You can only update your own profile",
+      });
+    }
+
+    // Whitelist allowed fields only
+    const allowedFields = ["name", "phone", "vehicle_type", "is_active"];
+    const filteredBody = {};
+
+    allowedFields.forEach((field) => {
+      if (field in req.body) {
+        filteredBody[field] = req.body[field];
+      }
+    });
+
+    const result = await updateRider(id, filteredBody);
 
     if (result.success) {
       return res.status(200).json(result);
@@ -103,29 +126,46 @@ router.put("/:riderId", async (req, res) => {
       return res.status(400).json(result);
     }
   } catch (error) {
+    logger.error("Update rider failed", { error: error.message });
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: "Internal server error",
+      message: "Failed to update rider",
     });
   }
 });
 
 // DELETE: Delete rider
 // Usage: DELETE /api/riders/1
-router.delete("/:riderId", async (req, res) => {
+router.delete("/:id", verifyToken, async (req, res) => {
   try {
-    const { riderId } = req.params;
-    const result = await deleteRider(riderId);
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    // Only allow rider to delete their own account
+    if (id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden",
+        message: "You can only delete your own account",
+      });
+    }
+
+    const result = await deleteRider(id);
 
     if (result.success) {
+      // Clear the auth cookie on delete
+      res.clearCookie("auth_token");
       return res.status(200).json(result);
     } else {
       return res.status(400).json(result);
     }
   } catch (error) {
+    logger.error("Delete rider failed", { error: error.message });
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: "Internal server error",
+      message: "Failed to delete rider account",
     });
   }
 });

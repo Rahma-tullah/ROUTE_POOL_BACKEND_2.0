@@ -1,4 +1,5 @@
 // src/validators/status.validator.js
+// Valid status values
 
 export const validateDeliveryStatusUpdate = (data) => {
   const errors = [];

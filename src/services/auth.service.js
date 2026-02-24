@@ -61,7 +61,7 @@ export const signup = async (signupData) => {
     const userId = authData.user.id;
     logger.info("Auth user created", { email, userId });
 
-    // Step 2: Create user record in appropriate table
+    // Step 2: Create user record
     let userData;
 
     if (user_type === "retailer") {
@@ -108,12 +108,24 @@ export const signup = async (signupData) => {
     }
 
     logger.info("Signup successful", { email, userId, userType: user_type });
+
+    // AUTO-SEND OTP ✅
+    try {
+      await sendOTP(email);
+      logger.info("OTP auto-sent after signup", { email });
+    } catch (otpError) {
+      logger.warn("Failed to auto-send OTP", {
+        email,
+        error: otpError.message,
+      });
+    }
+
     return {
       success: true,
       data: {
         userId: userId,
         user: userData,
-        message: "Signup successful. Please verify your email with OTP.",
+        message: "Signup successful. Check your email for OTP.",
       },
       message: "Signup successful",
     };

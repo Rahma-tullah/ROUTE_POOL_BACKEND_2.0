@@ -1,5 +1,8 @@
 // src/routes/verification.routes.js
-
+import { verifyToken } from "../middleware/auth.middleware.js";
+import { strictLimiter } from "../middleware/ratelimit.middleware.js";
+import supabase from "../config/supabase.js";
+import { logger } from "../utils/logger.js";
 import express from "express";
 import {
   generateVerificationCode,
@@ -11,7 +14,7 @@ const router = express.Router();
 
 // POST: Generate verification code for delivery
 // Usage: POST /api/verification/generate
-router.post("/generate", async (req, res) => {
+router.post("/generate", verifyToken, strictLimiter, async (req, res) => {
   try {
     const { delivery_id } = req.body;
 
@@ -19,6 +22,22 @@ router.post("/generate", async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "delivery_id is required",
+      });
+    }
+
+    // Only allow if user owns this delivery
+    const { data: delivery } = await supabase
+      .from("deliveries")
+      .select("retailer_id")
+      .eq("id", delivery_id)
+      .single();
+
+    if (!delivery || delivery.retailer_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden",
+        message:
+          "You do not have permission to generate codes for this delivery",
       });
     }
 
@@ -30,16 +49,17 @@ router.post("/generate", async (req, res) => {
       return res.status(400).json(result);
     }
   } catch (error) {
+    logger.error("Generate code failed", { error: error.message });
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: "Internal server error",
+      message: "Failed to generate code",
     });
   }
 });
-
 // POST: Verify code for delivery
 // Usage: POST /api/verification/verify
-router.post("/verify", async (req, res) => {
+router.post("/verify", verifyToken, strictLimiter, async (req, res) => {
   try {
     const { delivery_id, code } = req.body;
 
@@ -58,9 +78,11 @@ router.post("/verify", async (req, res) => {
       return res.status(400).json(result);
     }
   } catch (error) {
+    logger.error("Verify code failed", { error: error.message });
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: "Internal server error",
+      message: "Verification failed",
     });
   }
 });
