@@ -31,7 +31,7 @@ export const strictLimiter = rateLimit({
 // OTP rate limit: 3 OTP requests per hour (per email)
 export const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 3,
+  max: 20,
   message: {
     success: false,
     error: "Too many OTP requests",
