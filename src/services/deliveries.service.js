@@ -12,7 +12,7 @@ export const createDelivery = async (deliveryData) => {
       .from("deliveries")
       .insert([deliveryData])
       .select();
-
+    console.log("INSERT RESULT:", { data, error });
     if (error) throw error;
 
     return {

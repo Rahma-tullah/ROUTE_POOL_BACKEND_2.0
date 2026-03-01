@@ -14,7 +14,6 @@ export const updateDeliveryStatus = async (deliveryId, newStatus) => {
       status: newStatus,
     });
 
-    // Get current delivery
     const { data: delivery, error: fetchError } = await supabase
       .from("deliveries")
       .select("*")
@@ -23,11 +22,10 @@ export const updateDeliveryStatus = async (deliveryId, newStatus) => {
 
     if (fetchError) throw new Error("Delivery not found");
 
-    // Validate status transition
     const validTransitions = {
       pending: ["in_transit", "cancelled"],
       in_transit: ["delivered", "pending"],
-      delivered: [], // No transitions from delivered
+      delivered: [],
     };
 
     if (!validTransitions[delivery.status]?.includes(newStatus)) {
@@ -36,15 +34,10 @@ export const updateDeliveryStatus = async (deliveryId, newStatus) => {
       );
     }
 
-    // Update delivery
-    const { data: updated, error: updateError } = await supabase
+    const { error: updateError } = await supabase
       .from("deliveries")
-      .update({
-        status: newStatus,
-        updated_at: new Date(),
-      })
-      .eq("id", deliveryId)
-      .select();
+      .update({ status: newStatus, updated_at: new Date() })
+      .eq("id", deliveryId);
 
     if (updateError) throw updateError;
 
@@ -72,7 +65,6 @@ export const updateBatchStatus = async (batchId, newStatus) => {
   try {
     validateBatchStatusUpdate({ batch_id: batchId, status: newStatus });
 
-    // Get current batch
     const { data: batch, error: fetchError } = await supabase
       .from("batches")
       .select("*")
@@ -81,25 +73,21 @@ export const updateBatchStatus = async (batchId, newStatus) => {
 
     if (fetchError) throw new Error("Batch not found");
 
-    // Validate status transition
     const validTransitions = {
       created: ["in_transit", "cancelled"],
       in_transit: ["completed", "created"],
-      completed: [], // No transitions from completed
+      completed: [],
     };
 
     if (!validTransitions[batch.status]?.includes(newStatus)) {
       throw new Error(`Cannot transition from ${batch.status} to ${newStatus}`);
     }
 
-    // If completing batch, update all linked deliveries
+    // If completing batch, mark all linked deliveries as delivered
     if (newStatus === "completed") {
       const { error: deliveryError } = await supabase
         .from("deliveries")
-        .update({
-          status: "delivered",
-          updated_at: new Date(),
-        })
+        .update({ status: "delivered", updated_at: new Date() })
         .eq("batch_id", batchId)
         .neq("status", "delivered");
 
@@ -107,8 +95,7 @@ export const updateBatchStatus = async (batchId, newStatus) => {
         console.error("Error updating linked deliveries:", deliveryError);
     }
 
-    // Update batch
-    const { data: updated, error: updateError } = await supabase
+    const { error: updateError } = await supabase
       .from("batches")
       .update({
         status: newStatus,
@@ -123,9 +110,9 @@ export const updateBatchStatus = async (batchId, newStatus) => {
     return {
       success: true,
       data: {
-        batchId: batchId,
+        batchId,
         previousStatus: batch.status,
-        newStatus: newStatus,
+        newStatus,
         updatedAt: new Date(),
       },
       message: `Batch status updated to ${newStatus}`,
@@ -160,17 +147,13 @@ export const getDeliveryStatusHistory = async (deliveryId) => {
       },
     };
   } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-    };
+    return { success: false, error: error.message };
   }
 };
 
-// Get batch status with all deliveries
+// Get batch status with all deliveries (includes retailer pickup info)
 export const getBatchStatusWithDeliveries = async (batchId) => {
   try {
-    // Get batch
     const { data: batch, error: batchError } = await supabase
       .from("batches")
       .select("*")
@@ -179,15 +162,14 @@ export const getBatchStatusWithDeliveries = async (batchId) => {
 
     if (batchError) throw batchError;
 
-    // Get all deliveries in batch
+    // Join retailers so riders get shop_name, shop_address, phone for pickup
     const { data: deliveries, error: deliveriesError } = await supabase
       .from("deliveries")
-      .select("*")
+      .select("*, retailers(name, phone, shop_name, shop_address)")
       .eq("batch_id", batchId);
 
     if (deliveriesError) throw deliveriesError;
 
-    // Count by status
     const statusCounts = {
       pending: deliveries.filter((d) => d.status === "pending").length,
       in_transit: deliveries.filter((d) => d.status === "in_transit").length,
@@ -208,9 +190,6 @@ export const getBatchStatusWithDeliveries = async (batchId) => {
       },
     };
   } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-    };
+    return { success: false, error: error.message };
   }
 };

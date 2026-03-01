@@ -1,3 +1,4 @@
+// src/routes/deliveries.routes.js
 import { verifyToken } from "../middleware/auth.middleware.js";
 import supabase from "../config/supabase.js";
 import { logger } from "../utils/logger.js";
@@ -13,16 +14,46 @@ import {
 
 const router = express.Router();
 
-// POST: Create a new delivery
-// Usage: POST /api/deliveries
+// Geocode an address string using Nominatim (OpenStreetMap) — Nigeria biased
+const geocodeAddress = async (address) => {
+  try {
+    const query = encodeURIComponent(`${address}, Nigeria`);
+    const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&countrycodes=ng`;
+    const res = await fetch(url, {
+      headers: {
+        // Nominatim requires a User-Agent identifying your app
+        "User-Agent": "RoutePool-DeliveryApp/1.0",
+      },
+    });
+    const data = await res.json();
+    if (data && data.length > 0) {
+      return {
+        latitude: parseFloat(data[0].lat),
+        longitude: parseFloat(data[0].lon),
+      };
+    }
+    return null;
+  } catch (err) {
+    logger.warn("Geocoding failed", { error: err.message });
+    return null;
+  }
+};
 
+// POST: Create a new delivery
 router.post("/", verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id;
+    const retailer = req.dbUser;
+    if (!retailer || retailer.user_type !== "retailer") {
+      return res
+        .status(403)
+        .json({
+          success: false,
+          error: "Forbidden",
+          message: "Only retailers can create deliveries",
+        });
+    }
 
-    // Whitelist fields
     const allowedFields = [
-      "retailer_id",
       "customer_name",
       "customer_phone",
       "address",
@@ -31,128 +62,106 @@ router.post("/", verifyToken, async (req, res) => {
       "package_description",
     ];
     const filteredBody = {};
-
     allowedFields.forEach((field) => {
-      if (field in req.body) {
-        filteredBody[field] = req.body[field];
-      }
+      if (field in req.body) filteredBody[field] = req.body[field];
     });
+    filteredBody.retailer_id = retailer.id;
 
-    // Verify retailer_id matches authenticated user
-    if (filteredBody.retailer_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "You can only create deliveries for your own account",
-      });
+    // If lat/lng not provided, geocode the address automatically
+    if (
+      (!filteredBody.latitude || !filteredBody.longitude) &&
+      filteredBody.address
+    ) {
+      logger.info("Geocoding address", { address: filteredBody.address });
+      const coords = await geocodeAddress(filteredBody.address);
+      if (coords) {
+        filteredBody.latitude = coords.latitude;
+        filteredBody.longitude = coords.longitude;
+        logger.info("Geocoded successfully", coords);
+      } else {
+        logger.warn(
+          "Could not geocode address — delivery will have no coordinates",
+          { address: filteredBody.address },
+        );
+      }
     }
 
     const result = await createDelivery(filteredBody);
-
-    if (result.success) {
-      return res.status(201).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    return res.status(result.success ? 201 : 400).json(result);
   } catch (error) {
     logger.error("Create delivery failed", { error: error.message });
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      message: "Failed to create delivery",
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "Internal server error",
+        message: "Failed to create delivery",
+      });
   }
 });
+
 // GET: Get all deliveries
-// Usage: GET /api/deliveries
 router.get("/", async (req, res) => {
   try {
     const result = await getAllDeliveries();
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // GET: Get deliveries by retailer
-// Usage: GET /api/deliveries/retailer/1
 router.get("/retailer/:retailerId", async (req, res) => {
   try {
-    const { retailerId } = req.params;
-    const result = await getDeliveriesByRetailer(retailerId);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    const result = await getDeliveriesByRetailer(req.params.retailerId);
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // GET: Get delivery by ID
-// Usage: GET /api/deliveries/1
 router.get("/:deliveryId", async (req, res) => {
   try {
-    const { deliveryId } = req.params;
-    const result = await getDeliveryById(deliveryId);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(404).json(result);
-    }
+    const result = await getDeliveryById(req.params.deliveryId);
+    return res.status(result.success ? 200 : 404).json(result);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // PUT: Update delivery
-// Usage: PUT /api/deliveries/1
 router.put("/:id", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = req.user.id;
+    const retailer = req.dbUser;
+    if (!retailer || retailer.user_type !== "retailer") {
+      return res
+        .status(403)
+        .json({
+          success: false,
+          error: "Forbidden",
+          message: "Only retailers can update deliveries",
+        });
+    }
 
-    // Get delivery to verify ownership
     const { data: delivery } = await supabase
       .from("deliveries")
       .select("retailer_id")
-      .eq("id", id)
+      .eq("id", req.params.id)
       .single();
+    if (!delivery)
+      return res
+        .status(404)
+        .json({ success: false, error: "Delivery not found" });
+    if (delivery.retailer_id !== retailer.id)
+      return res
+        .status(403)
+        .json({
+          success: false,
+          error: "Forbidden",
+          message: "You can only update your own deliveries",
+        });
 
-    if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        error: "Delivery not found",
-      });
-    }
-
-    // Only retailer can update their own delivery
-    if (delivery.retailer_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "You can only update your own deliveries",
-      });
-    }
-
-    // Whitelist allowed fields
     const allowedFields = [
       "customer_name",
       "customer_phone",
@@ -160,74 +169,67 @@ router.put("/:id", verifyToken, async (req, res) => {
       "package_description",
     ];
     const filteredBody = {};
-
     allowedFields.forEach((field) => {
-      if (field in req.body) {
-        filteredBody[field] = req.body[field];
-      }
+      if (field in req.body) filteredBody[field] = req.body[field];
     });
 
-    const result = await updateDelivery(id, filteredBody);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    const result = await updateDelivery(req.params.id, filteredBody);
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     logger.error("Update delivery failed", { error: error.message });
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      message: "Failed to update delivery",
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "Internal server error",
+        message: "Failed to update delivery",
+      });
   }
 });
 
 // DELETE: Delete delivery
-// Usage: DELETE /api/deliveries/1
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = req.user.id;
+    const retailer = req.dbUser;
+    if (!retailer || retailer.user_type !== "retailer") {
+      return res
+        .status(403)
+        .json({
+          success: false,
+          error: "Forbidden",
+          message: "Only retailers can delete deliveries",
+        });
+    }
 
-    // Get delivery to verify ownership
     const { data: delivery } = await supabase
       .from("deliveries")
       .select("retailer_id")
-      .eq("id", id)
+      .eq("id", req.params.id)
       .single();
+    if (!delivery)
+      return res
+        .status(404)
+        .json({ success: false, error: "Delivery not found" });
+    if (delivery.retailer_id !== retailer.id)
+      return res
+        .status(403)
+        .json({
+          success: false,
+          error: "Forbidden",
+          message: "You can only delete your own deliveries",
+        });
 
-    if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        error: "Delivery not found",
-      });
-    }
-
-    // Only retailer can delete their own delivery
-    if (delivery.retailer_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "You can only delete your own deliveries",
-      });
-    }
-
-    const result = await deleteDelivery(id);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    const result = await deleteDelivery(req.params.id);
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     logger.error("Delete delivery failed", { error: error.message });
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      message: "Failed to delete delivery",
-    });
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: "Internal server error",
+        message: "Failed to delete delivery",
+      });
   }
 });
 

@@ -20,44 +20,45 @@ const router = express.Router();
 // Usage: POST /api/ratings
 router.post("/", verifyToken, async (req, res) => {
   try {
-    const { delivery_id, rider_id, stars, comment } = req.body;
-    const userId = req.user.id;
+    const { delivery_id, stars, comment } = req.body;
+    const dbUserId = req.dbUser?.id;
 
-    // Validate required fields
-    if (!delivery_id || !rider_id || !stars) {
+    if (!delivery_id || !stars) {
       return res.status(400).json({
         success: false,
-        error: "delivery_id, rider_id, and stars are required",
+        error: "delivery_id and stars are required",
       });
     }
 
-    // Only retailer can create ratings
-    const { data: retailer } = await supabase
-      .from("retailers")
-      .select("id")
-      .eq("id", userId)
-      .single();
+    // Only retailers can rate
+    if (!dbUserId || req.dbUser?.user_type !== "retailer") {
+      // Double-check by looking up in retailers table
+      const { data: retailerCheck } = await supabase
+        .from("retailers")
+        .select("id")
+        .eq("id", dbUserId)
+        .single();
 
-    if (!retailer) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "Only retailers can create ratings",
-      });
+      if (!retailerCheck) {
+        return res.status(403).json({
+          success: false,
+          error: "Forbidden",
+          message: "Only retailers can create ratings",
+        });
+      }
     }
 
-    // Verify delivery exists and is completed
+    // Get delivery with batch info to resolve rider_id
     const { data: delivery } = await supabase
       .from("deliveries")
-      .select("status, retailer_id")
-      .eq("id", delivery_id)
+      .select("status, retailer_id, batch_id")
+      .eq("id", parseInt(delivery_id, 10))
       .single();
 
     if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        error: "Delivery not found",
-      });
+      return res
+        .status(404)
+        .json({ success: false, error: "Delivery not found" });
     }
 
     if (delivery.status !== "delivered") {
@@ -68,11 +69,30 @@ router.post("/", verifyToken, async (req, res) => {
       });
     }
 
-    if (delivery.retailer_id !== userId) {
+    if (delivery.retailer_id !== dbUserId) {
       return res.status(403).json({
         success: false,
         error: "Forbidden",
         message: "You can only rate your own deliveries",
+      });
+    }
+
+    // Resolve rider_id from the batch
+    let rider_id = null;
+    if (delivery.batch_id) {
+      const { data: batch } = await supabase
+        .from("batches")
+        .select("rider_id")
+        .eq("id", delivery.batch_id)
+        .single();
+      rider_id = batch?.rider_id || null;
+    }
+
+    if (!rider_id) {
+      return res.status(400).json({
+        success: false,
+        error: "No rider found",
+        message: "This delivery has no assigned rider to rate",
       });
     }
 
@@ -81,7 +101,7 @@ router.post("/", verifyToken, async (req, res) => {
       .from("ratings")
       .select("id")
       .eq("delivery_id", delivery_id)
-      .eq("retailer_id", userId)
+      .eq("retailer_id", dbUserId)
       .single();
 
     if (existingRating) {
@@ -93,9 +113,9 @@ router.post("/", verifyToken, async (req, res) => {
     }
 
     const result = await createRating({
-      delivery_id,
+      delivery_id: parseInt(delivery_id, 10),
       rider_id,
-      retailer_id: userId,
+      retailer_id: dbUserId,
       stars,
       comment,
     });
@@ -114,199 +134,112 @@ router.post("/", verifyToken, async (req, res) => {
     });
   }
 });
+
 // GET: Get all ratings
-// Usage: GET /api/ratings
 router.get("/", async (req, res) => {
   try {
     const result = await getAllRatings();
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // GET: Get ratings by rider
-// Usage: GET /api/ratings/rider/1
 router.get("/rider/:riderId", async (req, res) => {
   try {
-    const { riderId } = req.params;
-    const result = await getRatingsByRider(riderId);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    const result = await getRatingsByRider(req.params.riderId);
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // GET: Get ratings by retailer
-// Usage: GET /api/ratings/retailer/1
 router.get("/retailer/:retailerId", async (req, res) => {
   try {
-    const { retailerId } = req.params;
-    const result = await getRatingsByRetailer(retailerId);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    const result = await getRatingsByRetailer(req.params.retailerId);
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET: Get ratings by delivery
+router.get("/delivery/:deliveryId", async (req, res) => {
+  try {
+    const result = await getRatingsByDelivery(req.params.deliveryId);
+    return res.status(result.success ? 200 : 400).json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // GET: Get rating by ID
-// Usage: GET /api/ratings/1
-router.get("/:ratingId", async (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const { ratingId } = req.params;
-    const result = await getRatingById(ratingId);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(404).json(result);
-    }
+    const result = await getRatingById(req.params.id);
+    return res.status(result.success ? 200 : 404).json(result);
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // PUT: Update rating
-// Usage: PUT /api/ratings/1
 router.put("/:id", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = req.user.id;
-
-    // Get rating to verify ownership
+    const dbUserId = req.dbUser?.id;
     const { data: rating } = await supabase
       .from("ratings")
       .select("retailer_id, created_at")
-      .eq("id", id)
+      .eq("id", req.params.id)
       .single();
 
-    if (!rating) {
-      return res.status(404).json({
-        success: false,
-        error: "Rating not found",
-      });
-    }
+    if (!rating)
+      return res
+        .status(404)
+        .json({ success: false, error: "Rating not found" });
+    if (rating.retailer_id !== dbUserId)
+      return res.status(403).json({ success: false, error: "Forbidden" });
 
-    // Only owner can update
-    if (rating.retailer_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "You can only update your own ratings",
-      });
-    }
-
-    // Check time window (30 minutes after creation)
-    const createdTime = new Date(rating.created_at).getTime();
-    const now = new Date().getTime();
-    const thirtyMinutes = 30 * 60 * 1000;
-
-    if (now - createdTime > thirtyMinutes) {
+    const minutesSince = (new Date() - new Date(rating.created_at)) / 60000;
+    if (minutesSince > 30) {
       return res.status(400).json({
         success: false,
-        error: "Rating window expired",
-        message: "Ratings can only be edited within 30 minutes of creation",
+        error: "Too late to edit",
+        message: "Ratings can only be edited within 30 minutes",
       });
     }
 
-    // Whitelist allowed fields
-    const allowedFields = ["stars", "comment"];
-    const filteredBody = {};
-
-    allowedFields.forEach((field) => {
-      if (field in req.body) {
-        filteredBody[field] = req.body[field];
-      }
-    });
-
-    const result = await updateRating(id, filteredBody);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    const { stars, comment } = req.body;
+    const result = await updateRating(req.params.id, { stars, comment });
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
-    logger.error("Update rating failed", { error: error.message });
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      message: "Failed to update rating",
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // DELETE: Delete rating
-// Usage: DELETE /api/ratings/1
 router.delete("/:id", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const userId = req.user.id;
-
-    // Get rating to verify ownership
+    const dbUserId = req.dbUser?.id;
     const { data: rating } = await supabase
       .from("ratings")
       .select("retailer_id")
-      .eq("id", id)
+      .eq("id", req.params.id)
       .single();
 
-    if (!rating) {
-      return res.status(404).json({
-        success: false,
-        error: "Rating not found",
-      });
-    }
+    if (!rating)
+      return res
+        .status(404)
+        .json({ success: false, error: "Rating not found" });
+    if (rating.retailer_id !== dbUserId)
+      return res.status(403).json({ success: false, error: "Forbidden" });
 
-    // Only owner can delete
-    if (rating.retailer_id !== userId) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "You can only delete your own ratings",
-      });
-    }
-
-    const result = await deleteRating(id);
-
-    if (result.success) {
-      return res.status(200).json(result);
-    } else {
-      return res.status(400).json(result);
-    }
+    const result = await deleteRating(req.params.id);
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
-    logger.error("Delete rating failed", { error: error.message });
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      message: "Failed to delete rating",
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

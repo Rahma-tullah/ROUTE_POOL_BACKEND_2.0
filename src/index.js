@@ -12,6 +12,7 @@ import authRoutes from "./routes/auth.routes.js";
 import clusteringRoutes from "./routes/clustering.routes.js";
 import verificationRoutes from "./routes/verification.routes.js";
 import statusRoutes from "./routes/status.routes.js";
+import chatRoutes from "./routes/chat.routes.js";
 
 // Load environment variables
 dotenv.config();
@@ -22,7 +23,13 @@ logger.info("Server starting");
 const PORT = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: ["http://localhost:5173"],
+    credentials: true,
+  }),
+);
+
 app.use(express.json());
 
 // Welcome route
@@ -46,6 +53,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/clustering", clusteringRoutes);
 app.use("/api/verification", verificationRoutes);
 app.use("/api/status", statusRoutes);
+app.use("/api/chat", chatRoutes);
 
 // Health check route
 app.get("/health", (req, res) => {

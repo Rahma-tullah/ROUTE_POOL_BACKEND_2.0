@@ -1,7 +1,10 @@
 // src/services/batches.service.js
 
 import supabase from "../config/supabase.js";
-import { validateBatch } from "../validators/batches.validator.js";
+import {
+  validateBatch,
+  validateBatchUpdate,
+} from "../validators/batches.validator.js"; // ✅ FIX: import validateBatchUpdate
 
 // Create a new batch
 export const createBatch = async (batchData) => {
@@ -130,7 +133,7 @@ export const getBatchesByStatus = async (status) => {
 // Update batch
 export const updateBatch = async (batchId, updateData) => {
   try {
-    validateBatch(updateData);
+    validateBatchUpdate(updateData); // ✅ FIX: use validateBatchUpdate for partial updates
 
     const { data, error } = await supabase
       .from("batches")

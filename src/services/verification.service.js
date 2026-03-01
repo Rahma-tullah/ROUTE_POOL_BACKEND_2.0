@@ -22,12 +22,23 @@ const hashCode = async (code) => {
   return await bcryptjs.hash(code, 10);
 };
 
+// Helper: Check if code is expired (24 hours)
+const isCodeExpired = (createdAt) => {
+  const createdDate = new Date(createdAt);
+  if (isNaN(createdDate.getTime())) {
+    logger.error("Invalid created_at date", { createdAt });
+    return true;
+  }
+  const expiryTime = 24 * 60 * 60 * 1000; // 24 hours
+  return new Date().getTime() - createdDate.getTime() > expiryTime;
+};
+
 // Generate verification code for delivery
 export const generateVerificationCode = async (deliveryId) => {
   try {
     validateCodeGeneration({ delivery_id: deliveryId });
 
-    // Step 1: Get delivery
+    // Get delivery
     const { data: delivery, error: deliveryError } = await supabase
       .from("deliveries")
       .select("*")
@@ -36,34 +47,17 @@ export const generateVerificationCode = async (deliveryId) => {
 
     if (deliveryError) throw new Error("Delivery not found");
 
-    // Step 2: Check if delivery already has a code
-    const { data: existingCode } = await supabase
+    // Delete any existing codes for this delivery before generating a new one
+    await supabase
       .from("verification_codes")
-      .select("*")
-      .eq("delivery_id", deliveryId)
-      .eq("is_used", false)
-      .single();
+      .delete()
+      .eq("delivery_id", deliveryId);
 
-    if (existingCode && !isCodeExpired(existingCode.created_at)) {
-      // Return existing valid code
-      return {
-        success: true,
-        data: {
-          deliveryId: deliveryId,
-          codeId: existingCode.id,
-          expiresAt: new Date(
-            new Date(existingCode.created_at).getTime() + 15 * 60000,
-          ),
-          message: "Code already generated. Use existing code.",
-        },
-      };
-    }
-
-    // Step 3: Generate new code
+    // Generate new code
     const code = generateCode(8);
-    const hashedCode = hashCode(code);
+    const hashedCode = await hashCode(code); // ← was missing await
 
-    // Step 4: Store code in database
+    // Store code in database
     const { data: storedCode, error: storeError } = await supabase
       .from("verification_codes")
       .insert([
@@ -71,24 +65,26 @@ export const generateVerificationCode = async (deliveryId) => {
           delivery_id: deliveryId,
           code_hash: hashedCode,
           is_used: false,
-          // Remove created_at - Supabase will set it automatically
         },
       ])
       .select();
 
     if (storeError) throw storeError;
 
+    logger.info("Verification code generated", { deliveryId });
+
     return {
       success: true,
       data: {
         deliveryId: deliveryId,
-        code: code, // Send actual code to user (not hash)
+        code: code,
         codeId: storedCode[0].id,
-        expiresAt: new Date(new Date().getTime() + 15 * 60000), // 15 minutes
-        message: "Verification code generated. Valid for 15 minutes.",
+        expiresAt: new Date(new Date().getTime() + 24 * 60 * 60 * 1000),
+        message: "Verification code generated. Valid for 24 hours.",
       },
     };
   } catch (error) {
+    logger.error("Generate code failed", { deliveryId, error: error.message });
     return {
       success: false,
       error: error.message,
@@ -104,42 +100,42 @@ export const verifyCode = async (deliveryId, code) => {
 
     validateCodeVerification({ delivery_id: deliveryId, code: code });
 
-    // Step 1: Get delivery
+    // Get delivery
     const { data: delivery, error: deliveryError } = await supabase
       .from("deliveries")
       .select("*")
       .eq("id", deliveryId)
       .single();
 
-    if (deliveryError) {
-      logger.error("Delivery not found for verification", { deliveryId });
-      throw new Error("Delivery not found");
-    }
+    if (deliveryError) throw new Error("Delivery not found");
 
-    // Step 2: Get verification code record
-    const { data: codeRecord, error: codeError } = await supabase
+    // Get the NEWEST unused code for this delivery
+    const { data: codes, error: codeError } = await supabase
       .from("verification_codes")
       .select("*")
       .eq("delivery_id", deliveryId)
       .eq("is_used", false)
-      .single();
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-    if (codeError || !codeRecord) {
+    if (codeError || !codes || codes.length === 0) {
       logger.warn("No valid code found", { deliveryId });
       throw new Error("No valid verification code found for this delivery");
     }
 
-    // Step 3: Check if code is expired
+    const codeRecord = codes[0];
+
+    // Check expiry
     if (isCodeExpired(codeRecord.created_at)) {
       logger.warn("Code expired", { deliveryId, codeId: codeRecord.id });
       return {
         success: false,
         error: "Code has expired",
-        message: "Verification code expired. Request a new code.",
+        message: "Verification code expired. Please generate a new code.",
       };
     }
 
-    // Step 4: Verify code
+    // Verify code against hash
     const isCodeValid = await bcryptjs.compare(code, codeRecord.code_hash);
     if (!isCodeValid) {
       logger.warn("Invalid code provided", {
@@ -153,30 +149,21 @@ export const verifyCode = async (deliveryId, code) => {
       };
     }
 
-    // Step 5: Mark code as used
+    // Mark code as used
     const { error: updateError } = await supabase
       .from("verification_codes")
       .update({ is_used: true, used_at: new Date() })
       .eq("id", codeRecord.id);
 
-    if (updateError) {
-      logger.error("Failed to mark code as used", {
-        deliveryId,
-        codeId: codeRecord.id,
-      });
-      throw updateError;
-    }
+    if (updateError) throw updateError;
 
-    // Step 6: Mark delivery as completed
+    // Mark delivery as delivered
     const { error: deliveryUpdateError } = await supabase
       .from("deliveries")
       .update({ status: "delivered" })
       .eq("id", deliveryId);
 
-    if (deliveryUpdateError) {
-      logger.error("Failed to mark delivery as completed", { deliveryId });
-      throw deliveryUpdateError;
-    }
+    if (deliveryUpdateError) throw deliveryUpdateError;
 
     logger.info("Code verified successfully", {
       deliveryId,
@@ -204,31 +191,8 @@ export const verifyCode = async (deliveryId, code) => {
     };
   }
 };
-// Helper: Check if code is expired (15 minutes)
-const isCodeExpired = (createdAt) => {
-  // Ensure createdAt is a valid date
-  const createdDate = new Date(createdAt);
 
-  // Handle invalid dates
-  if (isNaN(createdDate.getTime())) {
-    console.error("Invalid date:", createdAt);
-    return true; // Treat as expired if date is invalid
-  }
-
-  const created = createdDate.getTime();
-  const now = new Date().getTime();
-  const expiryTime = 15 * 60 * 1000; // 15 minutes in milliseconds
-
-  console.log("Created:", new Date(created));
-  console.log("Now:", new Date(now));
-  console.log("Difference (ms):", now - created);
-  console.log("Expiry time (ms):", expiryTime);
-  console.log("Is expired?", now - created > expiryTime);
-
-  return now - created > expiryTime;
-};
-
-// Get code info (without revealing actual code)
+// Get code info
 export const getCodeInfo = async (codeId) => {
   try {
     const { data: codeRecord, error } = await supabase
@@ -246,7 +210,7 @@ export const getCodeInfo = async (codeId) => {
         deliveryId: codeRecord.delivery_id,
         isUsed: codeRecord.is_used,
         expiresAt: new Date(
-          new Date(codeRecord.created_at).getTime() + 15 * 60000,
+          new Date(codeRecord.created_at).getTime() + 24 * 60 * 60 * 1000,
         ),
         isExpired: isCodeExpired(codeRecord.created_at),
       },

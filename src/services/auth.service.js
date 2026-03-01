@@ -44,8 +44,15 @@ export const signup = async (signupData) => {
 
     validateSignup(signupData);
 
-    const { email, name, phone, user_type, shop_name, vehicle_type } =
-      signupData;
+    const {
+      email,
+      name,
+      phone,
+      user_type,
+      shop_name,
+      shop_address,
+      vehicle_type,
+    } = signupData;
 
     // Step 1: Create user in Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -73,6 +80,7 @@ export const signup = async (signupData) => {
             email: email,
             phone: phone,
             shop_name: shop_name,
+            shop_address: shop_address,
           },
         ])
         .select();
@@ -147,8 +155,25 @@ export const sendOTP = async (email) => {
   try {
     validateEmail(email);
 
-    // Supabase automatically sends OTP when user signs up
-    // This endpoint is for resending OTP
+    // Check email exists in retailers or riders before sending OTP
+    const { data: retailer } = await supabase
+      .from("retailers")
+      .select("id")
+      .eq("email", email)
+      .single();
+
+    const { data: rider } = !retailer
+      ? await supabase.from("riders").select("id").eq("email", email).single()
+      : { data: null };
+
+    if (!retailer && !rider) {
+      return {
+        success: false,
+        error: "Email not registered",
+        message: "No account found with this email. Please sign up first.",
+      };
+    }
+
     const { error } = await supabase.auth.signInWithOtp({
       email: email,
     });

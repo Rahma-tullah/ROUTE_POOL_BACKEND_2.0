@@ -3,7 +3,7 @@
 import supabase from "../config/supabase.js";
 import { logger } from "../utils/logger.js";
 
-// Verify JWT token
+// Verify JWT token and attach flattened user + db record to req
 export const verifyToken = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
@@ -16,9 +16,10 @@ export const verifyToken = async (req, res, next) => {
       });
     }
 
-    const { data: user, error } = await supabase.auth.getUser(token);
+    // supabase.auth.getUser returns { data: { user }, error }
+    const { data, error } = await supabase.auth.getUser(token);
 
-    if (error || !user) {
+    if (error || !data?.user) {
       return res.status(401).json({
         success: false,
         error: "Invalid token",
@@ -26,9 +27,35 @@ export const verifyToken = async (req, res, next) => {
       });
     }
 
-    // Attach user to request
-    req.user = user;
+    // Flatten: req.user is now the actual Supabase auth user object
+    // so req.user.email, req.user.id (UUID) work directly everywhere
+    req.user = data.user;
     req.token = token;
+
+    // Also look up the integer DB record by email and attach as req.dbUser
+    // This gives routes access to the integer id without their own lookups
+    const email = data.user.email;
+
+    const { data: retailer } = await supabase
+      .from("retailers")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    if (retailer) {
+      req.dbUser = { ...retailer, user_type: "retailer" };
+    } else {
+      const { data: rider } = await supabase
+        .from("riders")
+        .select("*")
+        .eq("email", email)
+        .single();
+
+      if (rider) {
+        req.dbUser = { ...rider, user_type: "rider" };
+      }
+    }
+
     next();
   } catch (error) {
     logger.error("Token verification failed", { error: error.message });
@@ -43,19 +70,14 @@ export const verifyToken = async (req, res, next) => {
 // Verify user owns this resource
 export const verifyOwnership = async (req, res, next) => {
   try {
-    const userId = req.user.id;
-    const resourceId = req.params.id;
-
-    if (!userId) {
+    if (!req.dbUser?.id) {
       return res.status(401).json({
         success: false,
         error: "User not identified",
         message: "Unauthorized",
       });
     }
-
-    // Store for later use in route handlers
-    req.userId = userId;
+    req.userId = req.dbUser.id;
     next();
   } catch (error) {
     logger.error("Ownership verification failed", { error: error.message });
@@ -71,32 +93,7 @@ export const verifyOwnership = async (req, res, next) => {
 export const requireRole = (allowedRoles) => {
   return async (req, res, next) => {
     try {
-      const userId = req.user.id;
-
-      // Get user type from database
-      let userType = null;
-
-      // Check retailers table
-      const { data: retailer } = await supabase
-        .from("retailers")
-        .select("id")
-        .eq("id", userId)
-        .single();
-
-      if (retailer) {
-        userType = "retailer";
-      } else {
-        // Check riders table
-        const { data: rider } = await supabase
-          .from("riders")
-          .select("id")
-          .eq("id", userId)
-          .single();
-
-        if (rider) {
-          userType = "rider";
-        }
-      }
+      const userType = req.dbUser?.user_type;
 
       if (!userType || !allowedRoles.includes(userType)) {
         return res.status(403).json({

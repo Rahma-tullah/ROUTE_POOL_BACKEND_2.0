@@ -114,6 +114,7 @@ router.post("/verify-otp", verifyLimiter, async (req, res) => {
         success: true,
         data: {
           user: result.data.user,
+          token: result.data.token,
           message: "Login successful",
         },
       });
