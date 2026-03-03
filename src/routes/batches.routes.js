@@ -25,15 +25,124 @@ router.post("/", async (req, res) => {
   }
 });
 
-// GET: Get all batches (filtered by user type)
+// GET: All unassigned batches visible to any rider
+// Usage: GET /api/batches/available
+router.get("/available", verifyToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("batches")
+      .select("id, status, total_deliveries, created_at")
+      .is("rider_id", null)
+      .eq("status", "created")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    return res.status(200).json({ success: true, data: data || [] });
+  } catch (error) {
+    logger.error("Get available batches failed", { error: error.message });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to get available batches" });
+  }
+});
+
+// POST: Rider claims an available batch
+// Usage: POST /api/batches/:id/claim
+router.post("/:id/claim", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const dbUserId = req.dbUser?.id;
+
+    if (!dbUserId)
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+
+    // Must be a rider
+    const { data: rider } = await supabase
+      .from("riders")
+      .select("id")
+      .eq("id", dbUserId)
+      .single();
+
+    if (!rider) {
+      return res.status(403).json({
+        success: false,
+        error: "Forbidden",
+        message: "Only riders can claim batches",
+      });
+    }
+
+    // Get the batch and check it's still unclaimed
+    const { data: batch } = await supabase
+      .from("batches")
+      .select("id, rider_id, status")
+      .eq("id", id)
+      .single();
+
+    if (!batch)
+      return res.status(404).json({ success: false, error: "Batch not found" });
+
+    if (batch.rider_id !== null) {
+      return res.status(409).json({
+        success: false,
+        error: "Already claimed",
+        message: "This batch has already been claimed by another rider",
+      });
+    }
+
+    if (batch.status !== "created") {
+      return res.status(400).json({
+        success: false,
+        error: "Batch not available",
+        message: "This batch is no longer available",
+      });
+    }
+
+    // Assign rider — only update if still unclaimed (race condition safety)
+    const { data: updated, error: updateError } = await supabase
+      .from("batches")
+      .update({ rider_id: dbUserId })
+      .eq("id", id)
+      .is("rider_id", null)
+      .select()
+      .single();
+
+    if (updateError || !updated) {
+      return res.status(409).json({
+        success: false,
+        error: "Claim failed",
+        message:
+          "This batch was just claimed by another rider. Please try another.",
+      });
+    }
+
+    logger.info("Batch claimed", { batchId: id, riderId: dbUserId });
+    return res
+      .status(200)
+      .json({
+        success: true,
+        data: updated,
+        message: "Batch claimed successfully",
+      });
+  } catch (error) {
+    logger.error("Claim batch failed", { error: error.message });
+    res.status(500).json({ success: false, error: "Failed to claim batch" });
+  }
+});
+
+// GET: All batches (filtered by user type)
 router.get("/", verifyToken, async (req, res) => {
   try {
     const dbUserId = req.dbUser?.id;
-    const userType = req.dbUser?.user_type;
+
+    const { data: retailer } = await supabase
+      .from("retailers")
+      .select("id")
+      .eq("id", dbUserId)
+      .single();
+
     let batches;
 
-    if (userType === "retailer") {
-      // Retailer sees only batches containing their deliveries
+    if (retailer) {
       const { data: deliveries } = await supabase
         .from("deliveries")
         .select("batch_id")
@@ -52,7 +161,6 @@ router.get("/", verifyToken, async (req, res) => {
       if (error) throw error;
       batches = batchData;
     } else {
-      // Rider sees only their assigned batches
       const { data: batchData, error } = await supabase
         .from("batches")
         .select("id, rider_id, status, total_deliveries, created_at")
@@ -65,17 +173,11 @@ router.get("/", verifyToken, async (req, res) => {
     return res.status(200).json({ success: true, data: batches || [] });
   } catch (error) {
     logger.error("Get all batches failed", { error: error.message });
-    res
-      .status(500)
-      .json({
-        success: false,
-        error: "Internal server error",
-        message: "Failed to get batches",
-      });
+    res.status(500).json({ success: false, error: "Failed to get batches" });
   }
 });
 
-// GET: Get batches by rider
+// GET: Batches by rider
 router.get("/rider/:riderId", async (req, res) => {
   try {
     const result = await getBatchesByRider(req.params.riderId);
@@ -85,7 +187,7 @@ router.get("/rider/:riderId", async (req, res) => {
   }
 });
 
-// GET: Get batches by status
+// GET: Batches by status
 router.get("/status/:status", async (req, res) => {
   try {
     const result = await getBatchesByStatus(req.params.status);
@@ -95,12 +197,11 @@ router.get("/status/:status", async (req, res) => {
   }
 });
 
-// GET: Get batch by ID
+// GET: Batch by ID
 router.get("/:id", verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const dbUserId = req.dbUser?.id;
-    const userType = req.dbUser?.user_type;
 
     const { data: batch } = await supabase
       .from("batches")
@@ -108,45 +209,33 @@ router.get("/:id", verifyToken, async (req, res) => {
       .eq("id", id)
       .single();
 
-    if (!batch) {
+    if (!batch)
       return res.status(404).json({ success: false, error: "Batch not found" });
-    }
 
-    // Rider can view their own batch
-    if (userType === "rider" && batch.rider_id === dbUserId) {
-      const result = await getBatchById(id);
-      return res.status(result.success ? 200 : 400).json(result);
-    }
+    const { data: retailer } = await supabase
+      .from("retailers")
+      .select("id")
+      .eq("id", dbUserId)
+      .single();
 
-    // Retailer can view if they have deliveries in this batch
-    if (userType === "retailer") {
+    if (retailer) {
       const { data: delivery } = await supabase
         .from("deliveries")
         .select("id")
         .eq("batch_id", id)
         .eq("retailer_id", dbUserId)
         .single();
-
-      if (delivery) {
-        const result = await getBatchById(id);
-        return res.status(result.success ? 200 : 400).json(result);
-      }
+      if (!delivery)
+        return res.status(403).json({ success: false, error: "Forbidden" });
+    } else if (batch.rider_id !== dbUserId) {
+      return res.status(403).json({ success: false, error: "Forbidden" });
     }
 
-    return res.status(403).json({
-      success: false,
-      error: "Forbidden",
-      message: "You do not have permission to view this batch",
-    });
+    const result = await getBatchById(id);
+    return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     logger.error("Get batch failed", { error: error.message });
-    res
-      .status(500)
-      .json({
-        success: false,
-        error: "Internal server error",
-        message: "Failed to get batch",
-      });
+    res.status(500).json({ success: false, error: "Failed to get batch" });
   }
 });
 
@@ -162,35 +251,16 @@ router.put("/:id", verifyToken, async (req, res) => {
       .eq("id", id)
       .single();
 
-    if (!batch) {
+    if (!batch)
       return res.status(404).json({ success: false, error: "Batch not found" });
-    }
+    if (batch.rider_id !== dbUserId)
+      return res.status(403).json({ success: false, error: "Forbidden" });
 
-    if (batch.rider_id !== dbUserId) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "You do not have permission to update this batch",
-      });
-    }
-
-    const allowedFields = ["status"];
-    const filteredBody = {};
-    allowedFields.forEach((field) => {
-      if (field in req.body) filteredBody[field] = req.body[field];
-    });
-
-    const result = await updateBatch(id, filteredBody);
+    const result = await updateBatch(id, { status: req.body.status });
     return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     logger.error("Update batch failed", { error: error.message });
-    res
-      .status(500)
-      .json({
-        success: false,
-        error: "Internal server error",
-        message: "Failed to update batch",
-      });
+    res.status(500).json({ success: false, error: "Failed to update batch" });
   }
 });
 
@@ -206,29 +276,16 @@ router.delete("/:id", verifyToken, async (req, res) => {
       .eq("id", id)
       .single();
 
-    if (!batch) {
+    if (!batch)
       return res.status(404).json({ success: false, error: "Batch not found" });
-    }
-
-    if (batch.rider_id !== dbUserId) {
-      return res.status(403).json({
-        success: false,
-        error: "Forbidden",
-        message: "You do not have permission to delete this batch",
-      });
-    }
+    if (batch.rider_id !== dbUserId)
+      return res.status(403).json({ success: false, error: "Forbidden" });
 
     const result = await deleteBatch(id);
     return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     logger.error("Delete batch failed", { error: error.message });
-    res
-      .status(500)
-      .json({
-        success: false,
-        error: "Internal server error",
-        message: "Failed to delete batch",
-      });
+    res.status(500).json({ success: false, error: "Failed to delete batch" });
   }
 });
 

@@ -15,9 +15,10 @@ const getDistance = (lat1, lon1, lat2, lon2) => {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
+
 // Auto-batch cron job
 export const startAutoBatchCron = () => {
-  // Run every 1 minute: "*/1 * * * *"
+  // Run every 1 minute
   cron.schedule("*/1 * * * *", async () => {
     try {
       logger.info("🔄 Auto-batch cron job started");
@@ -49,13 +50,11 @@ export const startAutoBatchCron = () => {
       const processed = new Set();
 
       // First pass: Add pending deliveries to existing nearby batches
-      // First pass: Add pending deliveries to existing nearby batches
       for (const delivery of pendingDeliveries) {
         if (!delivery.latitude || !delivery.longitude) continue;
         if (processed.has(delivery.id)) continue;
 
         try {
-          // Find ALL existing batches with status 'created'
           const { data: existingBatches, error: batchFetchError } =
             await supabase.from("batches").select("id").eq("status", "created");
 
@@ -67,11 +66,9 @@ export const startAutoBatchCron = () => {
             continue;
           }
 
-          // Check each existing batch to see if delivery is nearby
           let addedToBatch = false;
 
           for (const batch of existingBatches) {
-            // Get deliveries in this batch
             const { data: batchDeliveries, error: bdError } = await supabase
               .from("deliveries")
               .select("latitude, longitude")
@@ -82,7 +79,6 @@ export const startAutoBatchCron = () => {
               continue;
             }
 
-            // Check distance to any delivery in batch
             for (const batchDelivery of batchDeliveries) {
               const distance = getDistance(
                 delivery.latitude,
@@ -91,7 +87,6 @@ export const startAutoBatchCron = () => {
                 batchDelivery.longitude,
               );
 
-              // If within 1km of existing batch, add to it
               if (distance <= 1) {
                 const { error: updateError } = await supabase
                   .from("deliveries")
@@ -131,7 +126,7 @@ export const startAutoBatchCron = () => {
 
         // Find nearby deliveries (within 1km, max 10)
         for (const other of pendingDeliveries) {
-          if (cluster.length >= 10) break; // Max 10 per batch
+          if (cluster.length >= 10) break;
           if (!other.latitude || !other.longitude) continue;
           if (processed.has(other.id)) continue;
 
@@ -151,26 +146,12 @@ export const startAutoBatchCron = () => {
         // Only create batch if we have 3+ deliveries
         if (cluster.length >= 3) {
           try {
-            // Get best available rider
-            const { data: riders, error: ridersError } = await supabase
-              .from("riders")
-              .select("*")
-              .order("average_rating", { ascending: false })
-              .limit(1);
-
-            if (ridersError || !riders || riders.length === 0) {
-              logger.warn("Cron: No available riders");
-              continue;
-            }
-
-            const rider = riders[0];
-
-            // Create batch
+            // Create batch with no rider — riders claim it themselves
             const { data: newBatch, error: batchError } = await supabase
               .from("batches")
               .insert([
                 {
-                  rider_id: rider.id,
+                  rider_id: null,
                   status: "created",
                   total_deliveries: cluster.length,
                 },
@@ -203,7 +184,6 @@ export const startAutoBatchCron = () => {
             logger.info("✅ Cron: New batch created", {
               batchId,
               deliveriesCount: cluster.length,
-              riderName: rider.name,
             });
 
             batchesCreated++;

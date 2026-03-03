@@ -24,26 +24,22 @@ export const findNearbyDeliveries = async (
   radiusKm = 1,
 ) => {
   try {
-    // Get all pending deliveries
     const { data: deliveries, error } = await supabase
       .from("deliveries")
       .select("*")
       .eq("status", "pending")
-      .is("batch_id", null); // Only unbatched deliveries
+      .is("batch_id", null);
 
     if (error) throw error;
 
-    // Filter by distance (since PostGIS might not be setup for raw queries)
     const nearby = deliveries.filter((d) => {
       if (!d.latitude || !d.longitude) return false;
-
       const distance = calculateDistance(
         latitude,
         longitude,
         d.latitude,
         d.longitude,
       );
-
       return distance <= radiusKm;
     });
 
@@ -96,7 +92,6 @@ export const getRiderBatchCount = async (riderId) => {
       .neq("status", "completed");
 
     if (error) throw error;
-
     return batches.length;
   } catch (error) {
     console.error(error);
@@ -117,25 +112,16 @@ export const findBestRider = async () => {
       };
     }
 
-    // Score riders: high rating + low workload
     const riders = ridersResult.data;
     const scoredRiders = [];
 
     for (const rider of riders) {
       const batchCount = await getRiderBatchCount(rider.id);
-
-      // Score: rating (weighted 70%) + availability (weighted 30%)
       const score =
         rider.average_rating * 0.7 + (5 - Math.min(batchCount, 5)) * 0.6;
-
-      scoredRiders.push({
-        ...rider,
-        batchCount,
-        score,
-      });
+      scoredRiders.push({ ...rider, batchCount, score });
     }
 
-    // Sort by score (highest first)
     scoredRiders.sort((a, b) => b.score - a.score);
 
     return {
@@ -213,27 +199,12 @@ export const createBatchFromNearby = async (deliveryId) => {
       };
     }
 
-    // Step 4: Find best rider
-    const riderResult = await findBestRider();
-
-    if (!riderResult.success) {
-      logger.error("No available riders", { deliveryId });
-      throw new Error(riderResult.error);
-    }
-
-    const rider = riderResult.data;
-    logger.info("Best rider selected", {
-      deliveryId,
-      riderId: rider.id,
-      riderName: rider.name,
-    });
-
-    // Step 5: Create batch
+    // Step 4: Create batch (riders claim it themselves)
     const { data: batch, error: batchError } = await supabase
       .from("batches")
       .insert([
         {
-          rider_id: rider.id,
+          rider_id: null,
           status: "created",
           total_deliveries: nearbyCount,
         },
@@ -249,13 +220,9 @@ export const createBatchFromNearby = async (deliveryId) => {
     }
 
     const batchId = batch[0].id;
-    logger.info("Batch created", {
-      batchId,
-      riderId: rider.id,
-      deliveriesCount: nearbyCount,
-    });
+    logger.info("Batch created", { batchId, deliveriesCount: nearbyCount });
 
-    // Step 6: Link nearby deliveries to batch
+    // Step 5: Link nearby deliveries to batch
     const nearbyIds = nearbyResult.data.map((d) => d.id);
 
     const { error: updateError } = await supabase
@@ -275,7 +242,6 @@ export const createBatchFromNearby = async (deliveryId) => {
     logger.info("Batch creation successful", {
       batchId,
       deliveryIds: nearbyIds,
-      rider: rider.name,
     });
 
     return {
@@ -283,15 +249,11 @@ export const createBatchFromNearby = async (deliveryId) => {
       canBatch: true,
       data: {
         batchId: batchId,
-        riderId: rider.id,
-        riderName: rider.name,
-        riderRating: rider.average_rating,
-        vehicleType: rider.vehicle_type,
         deliveriesInBatch: nearbyCount,
         deliveryIds: nearbyIds,
         status: "created",
       },
-      message: `Batch created! ${nearbyCount} deliveries assigned to ${rider.name} (Rating: ${rider.average_rating})`,
+      message: `Batch created! ${nearbyCount} deliveries ready for riders to claim.`,
     };
   } catch (error) {
     logger.error("Batch creation failed", { deliveryId, error: error.message });
@@ -302,10 +264,10 @@ export const createBatchFromNearby = async (deliveryId) => {
     };
   }
 };
+
 // Get clustering statistics
 export const getClusteringStats = async () => {
   try {
-    // Pending deliveries
     const { data: pendingDeliveries, error: pendingError } = await supabase
       .from("deliveries")
       .select("*")
@@ -313,7 +275,6 @@ export const getClusteringStats = async () => {
 
     if (pendingError) throw pendingError;
 
-    // Active batches
     const { data: activeBatches, error: batchError } = await supabase
       .from("batches")
       .select("*")
@@ -321,7 +282,6 @@ export const getClusteringStats = async () => {
 
     if (batchError) throw batchError;
 
-    // Completed deliveries
     const { data: completedDeliveries, error: completedError } = await supabase
       .from("deliveries")
       .select("*")
