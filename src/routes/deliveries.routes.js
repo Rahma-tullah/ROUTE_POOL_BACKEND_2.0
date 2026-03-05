@@ -120,6 +120,80 @@ router.get("/retailer/:retailerId", async (req, res) => {
   }
 });
 
+// GET: Get deliveries by retailer enriched with batch + rider info
+// Usage: GET /api/deliveries/retailer/:retailerId/full
+router.get("/retailer/:retailerId/full", async (req, res) => {
+  try {
+    const { retailerId } = req.params;
+
+    // Get all deliveries for this retailer
+    const { data: deliveries, error: deliveriesError } = await supabase
+      .from("deliveries")
+      .select("*")
+      .eq("retailer_id", retailerId)
+      .order("created_at", { ascending: false });
+
+    if (deliveriesError) throw deliveriesError;
+
+    // For each delivery that has a batch_id, fetch batch + rider info
+    const batchIds = [
+      ...new Set(deliveries.map((d) => d.batch_id).filter(Boolean)),
+    ];
+
+    let batchMap = {};
+    if (batchIds.length > 0) {
+      const { data: batches } = await supabase
+        .from("batches")
+        .select("id, status, rider_id")
+        .in("id", batchIds);
+
+      if (batches) {
+        // Get all rider_ids from those batches
+        const riderIds = [
+          ...new Set(batches.map((b) => b.rider_id).filter(Boolean)),
+        ];
+
+        let riderMap = {};
+        if (riderIds.length > 0) {
+          const { data: riders } = await supabase
+            .from("riders")
+            .select("id, name, phone, vehicle_type")
+            .in("id", riderIds);
+
+          if (riders) {
+            riders.forEach((r) => {
+              riderMap[r.id] = r;
+            });
+          }
+        }
+
+        batches.forEach((b) => {
+          batchMap[b.id] = {
+            batch_id: b.id,
+            batch_status: b.status,
+            rider: b.rider_id ? riderMap[b.rider_id] || null : null,
+          };
+        });
+      }
+    }
+
+    // Enrich each delivery
+    const enriched = deliveries.map((d) => ({
+      ...d,
+      batch_info: d.batch_id ? batchMap[d.batch_id] || null : null,
+    }));
+
+    return res
+      .status(200)
+      .json({ success: true, data: enriched, count: enriched.length });
+  } catch (error) {
+    logger.error("Get enriched deliveries failed", { error: error.message });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch deliveries" });
+  }
+});
+
 // GET: Get delivery by ID
 router.get("/:deliveryId", async (req, res) => {
   try {
