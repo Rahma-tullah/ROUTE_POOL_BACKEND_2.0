@@ -46,6 +46,45 @@ router.get("/available", verifyToken, async (req, res) => {
   }
 });
 
+// GET: Preview deliveries in an available (unclaimed) batch
+// Usage: GET /api/batches/:id/preview
+router.get("/:id/preview", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Fetch the batch
+    const { data: batch } = await supabase
+      .from("batches")
+      .select("id, status, total_deliveries, rider_id")
+      .eq("id", id)
+      .single();
+
+    if (!batch)
+      return res.status(404).json({ success: false, error: "Batch not found" });
+
+    // Fetch deliveries in the batch
+    const { data: deliveries, error } = await supabase
+      .from("deliveries")
+      .select("id, customer_name, address, package_description, status")
+      .eq("batch_id", id);
+
+    if (error) throw error;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        batch_id: batch.id,
+        status: batch.status,
+        total_deliveries: batch.total_deliveries,
+        deliveries: deliveries || [],
+      },
+    });
+  } catch (error) {
+    logger.error("Preview batch failed", { error: error.message });
+    res.status(500).json({ success: false, error: "Failed to preview batch" });
+  }
+});
+
 // POST: Rider claims an available batch
 // Usage: POST /api/batches/:id/claim
 router.post("/:id/claim", verifyToken, async (req, res) => {
@@ -116,13 +155,11 @@ router.post("/:id/claim", verifyToken, async (req, res) => {
     }
 
     logger.info("Batch claimed", { batchId: id, riderId: dbUserId });
-    return res
-      .status(200)
-      .json({
-        success: true,
-        data: updated,
-        message: "Batch claimed successfully",
-      });
+    return res.status(200).json({
+      success: true,
+      data: updated,
+      message: "Batch claimed successfully",
+    });
   } catch (error) {
     logger.error("Claim batch failed", { error: error.message });
     res.status(500).json({ success: false, error: "Failed to claim batch" });
