@@ -50,7 +50,11 @@ router.get("/available", verifyToken, async (req, res) => {
 // Usage: GET /api/batches/:id/preview
 router.get("/:id/preview", verifyToken, async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id))
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid batch ID" });
 
     // Fetch the batch
     const { data: batch } = await supabase
@@ -69,6 +73,11 @@ router.get("/:id/preview", verifyToken, async (req, res) => {
       .eq("batch_id", id);
 
     if (error) throw error;
+    logger.info("Preview batch deliveries", {
+      batchId: id,
+      found: deliveries?.length,
+      deliveries,
+    });
 
     return res.status(200).json({
       success: true,
@@ -155,11 +164,13 @@ router.post("/:id/claim", verifyToken, async (req, res) => {
     }
 
     logger.info("Batch claimed", { batchId: id, riderId: dbUserId });
-    return res.status(200).json({
-      success: true,
-      data: updated,
-      message: "Batch claimed successfully",
-    });
+    return res
+      .status(200)
+      .json({
+        success: true,
+        data: updated,
+        message: "Batch claimed successfully",
+      });
   } catch (error) {
     logger.error("Claim batch failed", { error: error.message });
     res.status(500).json({ success: false, error: "Failed to claim batch" });
