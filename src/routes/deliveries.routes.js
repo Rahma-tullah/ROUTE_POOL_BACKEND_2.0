@@ -14,23 +14,41 @@ import {
 
 const router = express.Router();
 
-// Geocode an address string using Nominatim (OpenStreetMap) — Nigeria biased
+// Abuja bounding box
+const ABUJA_BOUNDS = {
+  minLat: 8.3,
+  maxLat: 9.4,
+  minLon: 6.8,
+  maxLon: 7.8,
+};
+
+const isWithinAbuja = (lat, lon) =>
+  lat >= ABUJA_BOUNDS.minLat &&
+  lat <= ABUJA_BOUNDS.maxLat &&
+  lon >= ABUJA_BOUNDS.minLon &&
+  lon <= ABUJA_BOUNDS.maxLon;
+
+// Geocode an address string using Nominatim (OpenStreetMap) — Abuja biased
 const geocodeAddress = async (address) => {
   try {
-    const query = encodeURIComponent(`${address}, Nigeria`);
+    const query = encodeURIComponent(`${address}, Abuja, Nigeria`);
     const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&countrycodes=ng`;
     const res = await fetch(url, {
-      headers: {
-        // Nominatim requires a User-Agent identifying your app
-        "User-Agent": "RoutePool-DeliveryApp/1.0",
-      },
+      headers: { "User-Agent": "RoutePool-DeliveryApp/1.0" },
     });
     const data = await res.json();
     if (data && data.length > 0) {
-      return {
-        latitude: parseFloat(data[0].lat),
-        longitude: parseFloat(data[0].lon),
-      };
+      const lat = parseFloat(data[0].lat);
+      const lon = parseFloat(data[0].lon);
+      if (!isWithinAbuja(lat, lon)) {
+        logger.warn("Geocoded coordinates outside Abuja bounds", {
+          lat,
+          lon,
+          address,
+        });
+        return { error: "outside_bounds" };
+      }
+      return { latitude: lat, longitude: lon };
     }
     return null;
   } catch (err) {
@@ -74,15 +92,24 @@ router.post("/", verifyToken, async (req, res) => {
     ) {
       logger.info("Geocoding address", { address: filteredBody.address });
       const coords = await geocodeAddress(filteredBody.address);
-      if (coords) {
+      if (coords && coords.error === "outside_bounds") {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid address",
+          message:
+            "This address could not be located within Abuja. Please enter a more specific Abuja address (e.g. include the district or landmark).",
+        });
+      } else if (coords) {
         filteredBody.latitude = coords.latitude;
         filteredBody.longitude = coords.longitude;
         logger.info("Geocoded successfully", coords);
       } else {
-        logger.warn(
-          "Could not geocode address — delivery will have no coordinates",
-          { address: filteredBody.address },
-        );
+        return res.status(400).json({
+          success: false,
+          error: "Address not found",
+          message:
+            "We could not find this address in Abuja. Please enter a more specific address.",
+        });
       }
     }
 
