@@ -28,33 +28,45 @@ const isWithinAbuja = (lat, lon) =>
   lon >= ABUJA_BOUNDS.minLon &&
   lon <= ABUJA_BOUNDS.maxLon;
 
-// Geocode an address string using Nominatim (OpenStreetMap) — Abuja biased
+// Geocode an address string using Nominatim — tries multiple queries
 const geocodeAddress = async (address) => {
-  try {
-    const query = encodeURIComponent(`${address}, Abuja, Nigeria`);
-    const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&countrycodes=ng`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "RoutePool-DeliveryApp/1.0" },
-    });
-    const data = await res.json();
-    if (data && data.length > 0) {
-      const lat = parseFloat(data[0].lat);
-      const lon = parseFloat(data[0].lon);
-      if (!isWithinAbuja(lat, lon)) {
-        logger.warn("Geocoded coordinates outside Abuja bounds", {
-          lat,
-          lon,
-          address,
-        });
-        return { error: "outside_bounds" };
+  // Try different query variations to maximise chance of a match
+  const queries = [
+    `${address}, Abuja, FCT, Nigeria`,
+    `${address}, Abuja, Nigeria`,
+    `${address}, FCT, Nigeria`,
+    `${address}, Nigeria`,
+  ];
+
+  for (const query of queries) {
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=3&countrycodes=ng`;
+      const res = await fetch(url, {
+        headers: { "User-Agent": "RoutePool-DeliveryApp/1.0" },
+      });
+      const data = await res.json();
+
+      if (data && data.length > 0) {
+        // Try each result — return first one within Abuja bounds
+        for (const result of data) {
+          const lat = parseFloat(result.lat);
+          const lon = parseFloat(result.lon);
+          if (isWithinAbuja(lat, lon)) {
+            logger.info("Geocoded within Abuja", { lat, lon, query });
+            return { latitude: lat, longitude: lon };
+          }
+        }
+        // If none within Abuja, note it
+        const lat = parseFloat(data[0].lat);
+        const lon = parseFloat(data[0].lon);
+        logger.warn("Geocoded result outside Abuja", { lat, lon, query });
       }
-      return { latitude: lat, longitude: lon };
+    } catch (err) {
+      logger.warn("Geocoding attempt failed", { query, error: err.message });
     }
-    return null;
-  } catch (err) {
-    logger.warn("Geocoding failed", { error: err.message });
-    return null;
   }
+
+  return { error: "outside_bounds" };
 };
 
 // POST: Create a new delivery
@@ -104,11 +116,9 @@ router.post("/", verifyToken, async (req, res) => {
         filteredBody.longitude = coords.longitude;
         logger.info("Geocoded successfully", coords);
       } else {
-        return res.status(400).json({
-          success: false,
-          error: "Address not found",
-          message:
-            "We could not find this address in Abuja. Please enter a more specific address.",
+        // Geocoding returned nothing at all — still allow delivery but without coordinates
+        logger.warn("Could not geocode address at all", {
+          address: filteredBody.address,
         });
       }
     }
