@@ -46,15 +46,12 @@ const geocodeAddress = async (address) => {
       const res = await fetch(url, {
         headers: {
           "User-Agent": "RoutePool-DeliveryApp/1.0 (contact@routepool.app)",
-          Accept: "application/json",
+          "Accept": "application/json",
         },
       });
 
       if (!res.ok) {
-        logger.warn("Nominatim returned non-200", {
-          status: res.status,
-          query,
-        });
+        logger.warn("Nominatim returned non-200", { status: res.status, query });
         continue;
       }
 
@@ -63,10 +60,7 @@ const geocodeAddress = async (address) => {
       try {
         data = JSON.parse(text);
       } catch {
-        logger.warn("Nominatim returned invalid JSON", {
-          query,
-          preview: text.slice(0, 80),
-        });
+        logger.warn("Nominatim returned invalid JSON", { query, preview: text.slice(0, 80) });
         continue;
       }
 
@@ -98,42 +92,23 @@ router.post("/", verifyToken, async (req, res) => {
   try {
     const retailer = req.dbUser;
     if (!retailer || retailer.user_type !== "retailer") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          error: "Forbidden",
-          message: "Only retailers can create deliveries",
-        });
+      return res.status(403).json({ success: false, error: "Forbidden", message: "Only retailers can create deliveries" });
     }
 
-    const allowedFields = [
-      "customer_name",
-      "customer_phone",
-      "address",
-      "latitude",
-      "longitude",
-      "package_description",
-    ];
+    const allowedFields = ["customer_name", "customer_phone", "address", "latitude", "longitude", "package_description"];
     const filteredBody = {};
-    allowedFields.forEach((field) => {
-      if (field in req.body) filteredBody[field] = req.body[field];
-    });
+    allowedFields.forEach((field) => { if (field in req.body) filteredBody[field] = req.body[field]; });
     filteredBody.retailer_id = retailer.id;
 
     // If lat/lng not provided, geocode the address automatically
-    if (
-      (!filteredBody.latitude || !filteredBody.longitude) &&
-      filteredBody.address
-    ) {
+    if ((!filteredBody.latitude || !filteredBody.longitude) && filteredBody.address) {
       logger.info("Geocoding address", { address: filteredBody.address });
       const coords = await geocodeAddress(filteredBody.address);
       if (coords && coords.error === "outside_bounds") {
         return res.status(400).json({
           success: false,
           error: "Invalid address",
-          message:
-            "This address could not be located within Abuja. Please enter a more specific Abuja address (e.g. include the district or landmark).",
+          message: "This address could not be located within Abuja. Please enter a more specific Abuja address (e.g. include the district or landmark).",
         });
       } else if (coords) {
         filteredBody.latitude = coords.latitude;
@@ -141,9 +116,7 @@ router.post("/", verifyToken, async (req, res) => {
         logger.info("Geocoded successfully", coords);
       } else {
         // Geocoding returned nothing at all — still allow delivery but without coordinates
-        logger.warn("Could not geocode address at all", {
-          address: filteredBody.address,
-        });
+        logger.warn("Could not geocode address at all", { address: filteredBody.address });
       }
     }
 
@@ -151,13 +124,7 @@ router.post("/", verifyToken, async (req, res) => {
     return res.status(result.success ? 201 : 400).json(result);
   } catch (error) {
     logger.error("Create delivery failed", { error: error.message });
-    res
-      .status(500)
-      .json({
-        success: false,
-        error: "Internal server error",
-        message: "Failed to create delivery",
-      });
+    res.status(500).json({ success: false, error: "Internal server error", message: "Failed to create delivery" });
   }
 });
 
@@ -197,9 +164,7 @@ router.get("/retailer/:retailerId/full", async (req, res) => {
     if (deliveriesError) throw deliveriesError;
 
     // For each delivery that has a batch_id, fetch batch + rider info
-    const batchIds = [
-      ...new Set(deliveries.map((d) => d.batch_id).filter(Boolean)),
-    ];
+    const batchIds = [...new Set(deliveries.map(d => d.batch_id).filter(Boolean))];
 
     let batchMap = {};
     if (batchIds.length > 0) {
@@ -210,9 +175,7 @@ router.get("/retailer/:retailerId/full", async (req, res) => {
 
       if (batches) {
         // Get all rider_ids from those batches
-        const riderIds = [
-          ...new Set(batches.map((b) => b.rider_id).filter(Boolean)),
-        ];
+        const riderIds = [...new Set(batches.map(b => b.rider_id).filter(Boolean))];
 
         let riderMap = {};
         if (riderIds.length > 0) {
@@ -222,13 +185,11 @@ router.get("/retailer/:retailerId/full", async (req, res) => {
             .in("id", riderIds);
 
           if (riders) {
-            riders.forEach((r) => {
-              riderMap[r.id] = r;
-            });
+            riders.forEach(r => { riderMap[r.id] = r; });
           }
         }
 
-        batches.forEach((b) => {
+        batches.forEach(b => {
           batchMap[b.id] = {
             batch_id: b.id,
             batch_status: b.status,
@@ -239,19 +200,15 @@ router.get("/retailer/:retailerId/full", async (req, res) => {
     }
 
     // Enrich each delivery
-    const enriched = deliveries.map((d) => ({
+    const enriched = deliveries.map(d => ({
       ...d,
       batch_info: d.batch_id ? batchMap[d.batch_id] || null : null,
     }));
 
-    return res
-      .status(200)
-      .json({ success: true, data: enriched, count: enriched.length });
+    return res.status(200).json({ success: true, data: enriched, count: enriched.length });
   } catch (error) {
     logger.error("Get enriched deliveries failed", { error: error.message });
-    res
-      .status(500)
-      .json({ success: false, error: "Failed to fetch deliveries" });
+    res.status(500).json({ success: false, error: "Failed to fetch deliveries" });
   }
 });
 
@@ -270,55 +227,22 @@ router.put("/:id", verifyToken, async (req, res) => {
   try {
     const retailer = req.dbUser;
     if (!retailer || retailer.user_type !== "retailer") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          error: "Forbidden",
-          message: "Only retailers can update deliveries",
-        });
+      return res.status(403).json({ success: false, error: "Forbidden", message: "Only retailers can update deliveries" });
     }
 
-    const { data: delivery } = await supabase
-      .from("deliveries")
-      .select("retailer_id")
-      .eq("id", req.params.id)
-      .single();
-    if (!delivery)
-      return res
-        .status(404)
-        .json({ success: false, error: "Delivery not found" });
-    if (delivery.retailer_id !== retailer.id)
-      return res
-        .status(403)
-        .json({
-          success: false,
-          error: "Forbidden",
-          message: "You can only update your own deliveries",
-        });
+    const { data: delivery } = await supabase.from("deliveries").select("retailer_id").eq("id", req.params.id).single();
+    if (!delivery) return res.status(404).json({ success: false, error: "Delivery not found" });
+    if (delivery.retailer_id !== retailer.id) return res.status(403).json({ success: false, error: "Forbidden", message: "You can only update your own deliveries" });
 
-    const allowedFields = [
-      "customer_name",
-      "customer_phone",
-      "address",
-      "package_description",
-    ];
+    const allowedFields = ["customer_name", "customer_phone", "address", "package_description"];
     const filteredBody = {};
-    allowedFields.forEach((field) => {
-      if (field in req.body) filteredBody[field] = req.body[field];
-    });
+    allowedFields.forEach((field) => { if (field in req.body) filteredBody[field] = req.body[field]; });
 
     const result = await updateDelivery(req.params.id, filteredBody);
     return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     logger.error("Update delivery failed", { error: error.message });
-    res
-      .status(500)
-      .json({
-        success: false,
-        error: "Internal server error",
-        message: "Failed to update delivery",
-      });
+    res.status(500).json({ success: false, error: "Internal server error", message: "Failed to update delivery" });
   }
 });
 
@@ -327,44 +251,18 @@ router.delete("/:id", verifyToken, async (req, res) => {
   try {
     const retailer = req.dbUser;
     if (!retailer || retailer.user_type !== "retailer") {
-      return res
-        .status(403)
-        .json({
-          success: false,
-          error: "Forbidden",
-          message: "Only retailers can delete deliveries",
-        });
+      return res.status(403).json({ success: false, error: "Forbidden", message: "Only retailers can delete deliveries" });
     }
 
-    const { data: delivery } = await supabase
-      .from("deliveries")
-      .select("retailer_id")
-      .eq("id", req.params.id)
-      .single();
-    if (!delivery)
-      return res
-        .status(404)
-        .json({ success: false, error: "Delivery not found" });
-    if (delivery.retailer_id !== retailer.id)
-      return res
-        .status(403)
-        .json({
-          success: false,
-          error: "Forbidden",
-          message: "You can only delete your own deliveries",
-        });
+    const { data: delivery } = await supabase.from("deliveries").select("retailer_id").eq("id", req.params.id).single();
+    if (!delivery) return res.status(404).json({ success: false, error: "Delivery not found" });
+    if (delivery.retailer_id !== retailer.id) return res.status(403).json({ success: false, error: "Forbidden", message: "You can only delete your own deliveries" });
 
     const result = await deleteDelivery(req.params.id);
     return res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     logger.error("Delete delivery failed", { error: error.message });
-    res
-      .status(500)
-      .json({
-        success: false,
-        error: "Internal server error",
-        message: "Failed to delete delivery",
-      });
+    res.status(500).json({ success: false, error: "Internal server error", message: "Failed to delete delivery" });
   }
 });
 
