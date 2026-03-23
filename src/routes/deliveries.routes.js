@@ -14,12 +14,12 @@ import {
 
 const router = express.Router();
 
-// Abuja bounding box
+// FCT / Abuja bounding box (generous coverage of the entire Federal Capital Territory)
 const ABUJA_BOUNDS = {
-  minLat: 8.3,
-  maxLat: 9.4,
-  minLon: 6.8,
-  maxLon: 7.8,
+  minLat: 7.8,
+  maxLat: 9.8,
+  minLon: 6.4,
+  maxLon: 8.2,
 };
 
 const isWithinAbuja = (lat, lon) =>
