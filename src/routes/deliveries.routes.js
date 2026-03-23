@@ -28,26 +28,49 @@ const isWithinAbuja = (lat, lon) =>
   lon >= ABUJA_BOUNDS.minLon &&
   lon <= ABUJA_BOUNDS.maxLon;
 
+// Small delay helper to avoid rate limiting
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Geocode an address string using Nominatim — tries multiple queries
 const geocodeAddress = async (address) => {
-  // Try different query variations to maximise chance of a match
   const queries = [
     `${address}, Abuja, FCT, Nigeria`,
     `${address}, Abuja, Nigeria`,
-    `${address}, FCT, Nigeria`,
     `${address}, Nigeria`,
   ];
 
   for (const query of queries) {
     try {
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=3&countrycodes=ng`;
+      await sleep(1000); // Nominatim requires 1 request per second
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=3&countrycodes=ng&accept-language=en`;
       const res = await fetch(url, {
-        headers: { "User-Agent": "RoutePool-DeliveryApp/1.0" },
+        headers: {
+          "User-Agent": "RoutePool-DeliveryApp/1.0 (contact@routepool.app)",
+          Accept: "application/json",
+        },
       });
-      const data = await res.json();
+
+      if (!res.ok) {
+        logger.warn("Nominatim returned non-200", {
+          status: res.status,
+          query,
+        });
+        continue;
+      }
+
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        logger.warn("Nominatim returned invalid JSON", {
+          query,
+          preview: text.slice(0, 80),
+        });
+        continue;
+      }
 
       if (data && data.length > 0) {
-        // Try each result — return first one within Abuja bounds
         for (const result of data) {
           const lat = parseFloat(result.lat);
           const lon = parseFloat(result.lon);
@@ -56,10 +79,11 @@ const geocodeAddress = async (address) => {
             return { latitude: lat, longitude: lon };
           }
         }
-        // If none within Abuja, note it
-        const lat = parseFloat(data[0].lat);
-        const lon = parseFloat(data[0].lon);
-        logger.warn("Geocoded result outside Abuja", { lat, lon, query });
+        logger.warn("Geocoded result outside Abuja bounds", {
+          lat: parseFloat(data[0].lat),
+          lon: parseFloat(data[0].lon),
+          query,
+        });
       }
     } catch (err) {
       logger.warn("Geocoding attempt failed", { query, error: err.message });
